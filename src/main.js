@@ -1,4 +1,4 @@
-// Full game.js - paste over your current file
+// Full game.js - patched: foxes won't chase while rabbit is hidden
 class MainScene extends Phaser.Scene {
     constructor() {
         super("MainScene");
@@ -36,10 +36,13 @@ class MainScene extends Phaser.Scene {
 
         this.treeGroup = this.physics.add.staticGroup();
 
+        // store positions for overlay drawing (if needed)
+        var treePositions = [];
+
         for (let x = 300; x < this.worldWidth; x += treeSpacing) {
             for (let y = 300; y < this.worldHeight; y += treeSpacing) {
-                const tx = x + Phaser.Math.Between(-40, 40);
-                const ty = y + Phaser.Math.Between(-40, 40);
+                const tx = x + Phaser.Math.Between(-100, 100);
+                const ty = y + Phaser.Math.Between(-100, 100);
 
                 if (Math.random() > placementChance) continue;
 
@@ -49,13 +52,12 @@ class MainScene extends Phaser.Scene {
                 const tree = this.treeGroup.create(tx, ty, "tree");
                 tree.setScale(treeScale).refreshBody();
 
+                treePositions.push({ tx, ty });
+
                 // --- TIGHTER HITBOX (shrink to trunk-like area) ---
-                // setSize expects body width/height in world pixels (texture sizes are scaled)
-                // so we use the scaled width/height reported on the display object
                 const bw = tree.displayWidth;
                 const bh = tree.displayHeight;
-                // set hitbox smaller and offset downward to trunk area
-                tree.body.setSize(bw * 0.35, bh * 0.4);
+                tree.body.setSize(bw * 0.35, bh * 0.45);
                 tree.body.setOffset((tree.width * tree.scaleX - bw * 0.35) / 2, bh * 0.55);
             }
         }
@@ -85,9 +87,8 @@ class MainScene extends Phaser.Scene {
             fox.setScale(0.25);
             fox.setCollideWorldBounds(true);
             fox.isChasing = false;
-            fox.randomX = Phaser.Math.Between(-60, 60);
-            fox.randomY = Phaser.Math.Between(-60, 60);
-            fox.isConfused = false;
+            fox.randomX = Phaser.Math.Between(-200, 200);
+            fox.randomY = Phaser.Math.Between(-200, 200);
         }
         this.physics.add.collider(this.foxGroup, this.treeGroup);
 
@@ -98,6 +99,8 @@ class MainScene extends Phaser.Scene {
         // ---------------- CONTROLS (keyboard) ----------------
         this.cursors = this.input.keyboard.createCursorKeys();
         this.keyE = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
+        this.shiftKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT);
+        this.isRunning = false
 
         // ---------------- FOX ROAM TIMER ----------------
         this.time.addEvent({
@@ -106,12 +109,12 @@ class MainScene extends Phaser.Scene {
             callback: () => {
                 this.foxGroup.children.iterate((fox) => {
                     if (!fox) return;
-                    if (!fox.isChasing && !fox.isConfused) {
-                        fox.randomX = Phaser.Math.Between(-60, 60);
-                        fox.randomY = Phaser.Math.Between(-60, 60);
-                    } else if (fox.isConfused) {
-                        fox.randomX = Phaser.Math.Between(-30, 30);
-                        fox.randomY = Phaser.Math.Between(-30, 30);
+                    if (!fox.isChasing) {
+                        fox.randomX = Phaser.Math.Between(-260, 260);
+                        fox.randomY = Phaser.Math.Between(-260, 260);
+                    } else {
+                        fox.randomX = Phaser.Math.Between(-300, 300);
+                        fox.randomY = Phaser.Math.Between(-300, 300);
                     }
                 });
             }
@@ -122,6 +125,11 @@ class MainScene extends Phaser.Scene {
         this.CARROT_COUNT = 10;
         this.spawnInitialCarrots();
         this.physics.add.overlap(this.rabbit, this.carrotGroup, (rabbit, carrot) => this.collectCarrot(carrot));
+
+        // ----- tree overlay (draw extra tree images above sprites) -----
+        for (let i = 0; i < treePositions.length; i++) {
+            this.add.image(treePositions[i].tx, treePositions[i].ty, "tree").setScale(0.5);
+        }
 
         // ---------------- BUSHES (static group) ----------------
         this.bushGroup = this.physics.add.staticGroup();
@@ -149,23 +157,25 @@ class MainScene extends Phaser.Scene {
             const bushKey = "bush_" + Phaser.Math.Between(1, 10);
             const bush = this.bushGroup.create(bx, by, bushKey);
             bush.setScale(0.5).refreshBody();
-            // optionally tighten bush hitbox small so overlap works better visually
             bush.body.setSize(bush.displayWidth * 0.9, bush.displayHeight * 0.75);
             bush.body.setOffset(0, 0);
         }
 
-                // ---------------- SCORE ----------------
+        // ---------------- SCORE ----------------
         this.score = 0;
         this.scoreText = this.add.text(20, 20, "Carrots: 0", { fontSize: "28px", fill: "#fff" }).setScrollFactor(0);
 
         // rabbit collides with trees; bushes are for hiding (no physical blocking)
-        this.physics.add.overlap(this.rabbit, this.bushGroup); // we use manual distance checks for hide (works fine)
+        this.physics.add.overlap(this.rabbit, this.bushGroup);
 
         // ---------------- HIDE FEATURE state ----------------
         this.isHiding = false;
         this.canHide = false;
         this.currentBush = null;
         this.bushTouchRadius = 0; // radius for "touching" bush
+
+        // ---- IMPORTANT: consistent confuse radius for hide/AI ----
+        this.confuseRadius = 400;
 
         // ---------------- MOBILE UI variables ----------------
         this.mobileMode = false;
@@ -174,16 +184,21 @@ class MainScene extends Phaser.Scene {
         this.joystickPointerId = null;
         this.joystickForce = { x: 0, y: 0 };
 
-        this.interactBtn = this.add.text(650, 400, "E", { fontSize: "36px", fill: "#000", backgroundColor: "#fff", padding: { x: 18, y: 12 } })
+        this.interactBtn = this.add.text(config.width-20, 400, "Hide", { fontSize: "36px", fill: "#000", backgroundColor: "#fff", padding: { x: 18, y: 12 } })
             .setScrollFactor(0).setVisible(false).setInteractive();
         this.interactBtn.on("pointerdown", () => {
-            // mobile interact button toggles hide when possible
             if (this.canHide && !this.isHiding) this.enterHide();
             else if (this.isHiding) this.exitHide();
         });
+        this.runBtn = this.add.text(config.width-20, 500, "Run", { fontSize: "36px", fill: "#000", backgroundColor: "#fff", padding: { x:18, y:12 } })
+            .setScrollFactor(0).setVisible(false).setInteractive();
+        this.runBtn.on("pointerdown", () => {
+            this.isRunning = !this.isRunning
+            this.runBtn.setText(this.isRunning ? "Running" : "Run");
+        })
 
         // mobile toggle button (always visible on top-left)
-        this.mobileToggleBtn = this.add.text(580, 20, "📱 Mobile: OFF", { fontSize: "18px", fill: "#fff", backgroundColor: "rgba(0,0,0,0.4)", padding: { x: 10, y: 6 } })
+        this.mobileToggleBtn = this.add.text(config.width-20, 20, "📱 Mobile: OFF", { fontSize: "18px", fill: "#fff", backgroundColor: "rgba(0,0,0,0.4)", padding: { x: 10, y: 6 } })
             .setScrollFactor(0).setInteractive();
         this.mobileToggleBtn.on("pointerdown", () => {
             this.mobileMode = !this.mobileMode;
@@ -197,7 +212,6 @@ class MainScene extends Phaser.Scene {
         // pointer events for joystick
         this.input.on("pointerdown", (pointer) => {
             if (!this.mobileMode) return;
-            // check if pointer is within joystick base
             const px = pointer.x, py = pointer.y;
             const dist = Phaser.Math.Distance.Between(px, py, this.joystickBase.x, this.joystickBase.y);
             if (dist <= 80 && this.joystickPointerId === null) {
@@ -208,7 +222,6 @@ class MainScene extends Phaser.Scene {
         this.input.on("pointermove", (pointer) => {
             if (!this.mobileMode) return;
             if (pointer.id !== this.joystickPointerId) return;
-            // move thumb relative to base
             const dx = pointer.x - this.joystickBase.x;
             const dy = pointer.y - this.joystickBase.y;
             const max = 50;
@@ -274,17 +287,42 @@ class MainScene extends Phaser.Scene {
                 const fx = Phaser.Math.Clamp(Math.round(this.rabbit.x + off[0]), 100, this.worldWidth - 100);
                 const fy = Phaser.Math.Clamp(Math.round(this.rabbit.y + off[1]), 100, this.worldHeight - 100);
                 if (!this._isNearTree(fx, fy, safeTreeDistance)) {
-                    this.carrotGroup.create(fx, fy, "carrot").setScale(2);
+                    const c = this.carrotGroup.create(fx, fy, "carrot").setScale(3);
+                    // carrot bobbing tween
+                    this.tweens.add({
+                        targets: c,
+                        y: c.y - 12,
+                        duration: 900,
+                        ease: "Sine.inOut",
+                        yoyo: true,
+                        loop: -1
+                    });
                     return;
                 }
             }
             // last resort center
-            this.carrotGroup.create(Math.floor(this.worldWidth / 2), Math.floor(this.worldHeight / 2), "carrot").setScale(0.5);
+            const fallback = this.carrotGroup.create(Math.floor(this.worldWidth / 2), Math.floor(this.worldHeight / 2), "carrot").setScale(3);
+            this.tweens.add({
+                targets: fallback,
+                y: fallback.y - 12,
+                duration: 900,
+                ease: "Sine.inOut",
+                yoyo: true,
+                loop: -1
+            });
             return;
         }
 
         const carrot = this.carrotGroup.create(x, y, "carrot");
-        carrot.setScale(2);
+        carrot.setScale(3);
+        this.tweens.add({
+            targets: carrot,
+            y: carrot.y - 12,
+            duration: 900,
+            ease: "Sine.inOut",
+            yoyo: true,
+            loop: -1
+        });
     }
 
     collectCarrot(carrot) {
@@ -303,20 +341,15 @@ class MainScene extends Phaser.Scene {
         this.rabbit.setAlpha(0.25);
 
         // confuse nearby foxes
-        const confuseRadius = 400;
         this.foxGroup.children.iterate((fox) => {
             if (!fox) return;
             const dfx = Phaser.Math.Distance.Between(fox.x, fox.y, this.rabbit.x, this.rabbit.y);
-            if (dfx <= confuseRadius) {
-                fox.isConfused = true;
+            if (dfx <= this.confuseRadius) {
                 fox.isChasing = false;
                 fox.randomX = Phaser.Math.Between(-200, 200);
                 fox.randomY = Phaser.Math.Between(-200, 200);
             }
         });
-
-        // hide mobile interact button while hidden
-        if (this.mobileMode) this.interactBtn.setVisible(true);
     }
 
     exitHide() {
@@ -327,7 +360,6 @@ class MainScene extends Phaser.Scene {
         // un-confuse all foxes
         this.foxGroup.children.iterate((fox) => {
             if (!fox) return;
-            fox.isConfused = false;
         });
 
         // restore mobile interact visibility if overlapping bush
@@ -338,10 +370,17 @@ class MainScene extends Phaser.Scene {
         this.joystickBase.setVisible(state);
         this.joystickThumb.setVisible(state);
         this.interactBtn.setVisible(state && this.canHide);
+        this.runBtn.setVisible(state);
     }
 
     update() {
-        const speed = 220;
+        const baseSpeed = 150;
+        const runSpeed = 220;
+        const speed = (!this.isHiding && this.isRunning ? runSpeed : baseSpeed);
+
+        if (Phaser.Input.Keyboard.JustDown(this.shiftKey)) {
+            this.isRunning = !this.isRunning
+        }
 
         // ---------------- HIDING / MOVEMENT ----------------
         if (this.isHiding) {
@@ -352,6 +391,7 @@ class MainScene extends Phaser.Scene {
             // movement: keyboard or mobile joystick
             if (!this.mobileMode) {
                 this.rabbit.setVelocity(0);
+                if (!this.isHiding && Phaser.Input.Keyboard.JustDown(this.shiftKey)) {};
                 if (this.cursors.left.isDown) this.rabbit.setVelocityX(-speed);
                 else if (this.cursors.right.isDown) this.rabbit.setVelocityX(speed);
                 if (this.cursors.up.isDown) this.rabbit.setVelocityY(-speed);
@@ -362,7 +402,6 @@ class MainScene extends Phaser.Scene {
             } else {
                 // mobile joystick controls
                 this.rabbit.setVelocity(this.joystickForce.x * speed, this.joystickForce.y * speed);
-                // interact handled by mobile interactBtn pointerdown
             }
 
             // check bush overlap (distance-based)
@@ -371,7 +410,6 @@ class MainScene extends Phaser.Scene {
             this.bushGroup.children.iterate((bush) => {
                 if (!bush) return;
                 const d = Phaser.Math.Distance.Between(bush.x, bush.y, this.rabbit.x, this.rabbit.y);
-                // use bush.displayWidth to approximate size
                 if (d <= this.bushTouchRadius + (bush.displayWidth * 0.5)) {
                     this.canHide = true;
                     this.currentBush = bush;
@@ -385,14 +423,33 @@ class MainScene extends Phaser.Scene {
         // ---------------- FOX AI ----------------
         this.foxGroup.children.iterate((fox) => {
             if (!fox) return;
-            if (fox.isConfused) {
-                fox.setVelocity(fox.randomX, fox.randomY);
-                return;
+
+            // compute distance once
+            const dist = Phaser.Math.Distance.Between(fox.x, fox.y, this.rabbit.x, this.rabbit.y);
+
+            // If rabbit is hidden, foxes must NOT chase.
+            // If they are close enough to the hidden rabbit they become confused and wander.
+            if (this.isHiding) {
+                if (dist <= this.confuseRadius) {
+                    fox.isChasing = false;
+                    // immediate slow wander
+                    fox.setVelocity(fox.randomX, fox.randomY);
+                } else {
+                    // rabbit hidden and far away: ensure fox is not in chase mode.
+                    fox.isChasing = false;
+                    // if previously confused, allow it to stop being confused only when far
+                    // normal roam (respect fox.randomX/Y)
+                    fox.setVelocity(fox.randomX, fox.randomY);
+                }
+                return; // skip normal chase logic entirely while hiding
             }
+
+            // If fox is confused (from a previous hide) they wander slowly
+
+            // Normal chase/wander logic when rabbit is NOT hidden
             const chaseDistance = 350;
             const loseDistance = 500;
-            const dist = Phaser.Math.Distance.Between(fox.x, fox.y, this.rabbit.x, this.rabbit.y);
-            const chaseSpeed = 110;
+            const chaseSpeed = 200;
 
             if (dist < chaseDistance) {
                 fox.isChasing = true;
@@ -412,6 +469,10 @@ class MainScene extends Phaser.Scene {
 // ===== GAME CONFIG =====
 const config = {
     type: Phaser.AUTO,
+    scale: {
+        mode: Phaser.Scale.RESIZE,
+        autoCenter: Phaser.Scale.CENTER_BOTH,
+    },
     width: 800,
     height: 600,
     backgroundColor: "#000000",
