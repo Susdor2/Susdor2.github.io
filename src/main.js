@@ -6,8 +6,20 @@ class MainScene extends Phaser.Scene {
 
     preload() {
         // core assets (make sure these files exist at these paths)
-        this.load.image("rabbit", "assets/rabbit.png");
-        this.load.image("fox", "assets/fox.png");
+        this.load.spritesheet("rabbit-run", "assets/rabbit-run.png", {
+            frameWidth: 32,
+            frameHeight: 32,
+        });
+        this.load.spritesheet("rabbit-idle", "assets/rabbit-idle.png", {
+            frameWidth: 32,
+            frameHeight: 32,
+        });
+
+        this.load.spritesheet("fox", "assets/fox-sheet.png", {
+            frameWidth: 47,
+            frameHeight: 63,
+        });
+
         this.load.image("tree", "assets/tree.png");
         this.load.image("carrot", "assets/carrot.png");
 
@@ -63,15 +75,33 @@ class MainScene extends Phaser.Scene {
         }
 
         // ---------------- RABBIT (player) ----------------
-        this.rabbit = this.physics.add.sprite(this.rabbitStartX, this.rabbitStartY, "rabbit")
-            .setScale(0.12)
-            .setCollideWorldBounds(true);
+        this.rabbit = this.physics.add.sprite(this.rabbitStartX, this.rabbitStartY, "rabbit").setScale(2).setCollideWorldBounds(true);
+
+        this.anims.create({
+            key: "rabbit-run",
+            frames: this.anims.generateFrameNumbers("rabbit-run", { start: 0, end: 7 }),
+            frameRate: 10,
+            repeat: -1
+        });
+        this.anims.create({
+            key: "rabbit-idle",
+            frames: this.anims.generateFrameNumbers("rabbit-idle", { start: 0, end: 11 }),
+            frameRate: 10,
+            repeat: -1
+        });
+
 
         this.physics.add.collider(this.rabbit, this.treeGroup);
 
         // ---------------- FOXES (group) ----------------
         this.foxGroup = this.physics.add.group();
-        const foxCount = 6;
+        const foxCount = 3;
+        this.anims.create({
+            key: "fox-walk",
+            frames: this.anims.generateFrameNumbers("fox", { start: 3, end: 5 }),
+            frameRate: 10,
+            repeat: -1
+        });
         for (let i = 0; i < foxCount; i++) {
             let fx = Phaser.Math.Between(200, this.worldWidth - 200);
             let fy = Phaser.Math.Between(200, this.worldHeight - 200);
@@ -84,7 +114,7 @@ class MainScene extends Phaser.Scene {
             }
 
             let fox = this.foxGroup.create(fx, fy, "fox");
-            fox.setScale(0.25);
+            fox.setScale(1);
             fox.setCollideWorldBounds(true);
             fox.isChasing = false;
             fox.randomX = Phaser.Math.Between(-200, 200);
@@ -161,6 +191,16 @@ class MainScene extends Phaser.Scene {
             bush.body.setOffset(0, 0);
         }
 
+        // ---- FOX TOUCHES RABBIT = GAME OVER ----
+        this.physics.add.overlap(
+            this.rabbit,
+            this.foxGroup,
+            (rabbit, fox) => this.triggerGameOver(),
+            null,
+            this
+        );
+
+
         // ---------------- SCORE ----------------
         this.score = 0;
         this.scoreText = this.add.text(20, 20, "Carrots: 0", { fontSize: "28px", fill: "#fff" }).setScrollFactor(0);
@@ -189,6 +229,7 @@ class MainScene extends Phaser.Scene {
         this.interactBtn.on("pointerdown", () => {
             if (this.canHide && !this.isHiding) this.enterHide();
             else if (this.isHiding) this.exitHide();
+            this.interactBtn.setText(this.isHiding ? "Hiding" : "Hide")
         });
         this.runBtn = this.add.text(config.width-20, 500, "Run", { fontSize: "36px", fill: "#000", backgroundColor: "#fff", padding: { x:18, y:12 } })
             .setScrollFactor(0).setVisible(false).setInteractive();
@@ -218,6 +259,10 @@ class MainScene extends Phaser.Scene {
                 this.joystickPointerId = pointer.id;
             }
         }, this);
+
+        // Gmae Over Box
+        this.gameOverBox = this.add.text(this.scale.width/2, this.scale.height/2, "🐰Rabbit was caught!🦊", { fontSize: "36px", fill: "#000", backgroundColor: "#fff", padding: { x:18, y:12 } })
+             .setScrollFactor(0).setVisible(false)
 
         this.input.on("pointermove", (pointer) => {
             if (!this.mobileMode) return;
@@ -403,9 +448,34 @@ class MainScene extends Phaser.Scene {
         this.runBtn.setVisible(state);
     }
 
+triggerGameOver() {
+    if (this.isGameOver) return;
+    this.isGameOver = true;
+    this.gameOverBox.setVisible(true)
+
+    this.physics.pause();
+    this.rabbit.setVelocity(0, 0);
+    this.rabbit.setAlpha(0.3);
+
+    this.foxGroup.children.iterate(f => {
+        if (f) f.setVelocity(0, 0);
+    });
+
+    const w = this.scale.width;
+    const h = this.scale.height;
+
+    // Freeze player movement completely
+    this.rabbit.setVelocity(0, 0);
+}
+
+
+
+
     update() {
+        if (this.isGameOver) return;
+
         const baseSpeed = 150;
-        const runSpeed = 220;
+        const runSpeed = 250;
         const speed = (!this.isHiding && this.isRunning ? runSpeed : baseSpeed);
 
         if (Phaser.Input.Keyboard.JustDown(this.shiftKey)) {
@@ -422,10 +492,26 @@ class MainScene extends Phaser.Scene {
             if (!this.mobileMode) {
                 this.rabbit.setVelocity(0);
                 if (!this.isHiding && Phaser.Input.Keyboard.JustDown(this.shiftKey)) {};
-                if (this.cursors.left.isDown) this.rabbit.setVelocityX(-speed);
-                else if (this.cursors.right.isDown) this.rabbit.setVelocityX(speed);
+                if (this.cursors.left.isDown || this.cursors.right.isDown || 
+                    this.cursors.up.isDown || this.cursors.down.isDown) {
+
+                    this.rabbit.play("rabbit-run", true);
+
+                } else {
+                    this.rabbit.stop();
+                    this.rabbit.setFrame(0); // idle frame
+                    this.rabbit.play("rabbit-idle", true);
+                }
+
                 if (this.cursors.up.isDown) this.rabbit.setVelocityY(-speed);
                 else if (this.cursors.down.isDown) this.rabbit.setVelocityY(speed);
+                if (this.cursors.left.isDown) {
+                    this.rabbit.setVelocityX(-speed)
+                    this.rabbit.setFlipX(true)
+                } else if (this.cursors.right.isDown) {
+                    this.rabbit.setVelocityX(speed)
+                    this.rabbit.setFlipX(false)
+                }
 
                 // interact via E (desktop)
                 if (this.canHide && Phaser.Input.Keyboard.JustDown(this.keyE)) this.enterHide();
@@ -463,12 +549,18 @@ class MainScene extends Phaser.Scene {
                 if (dist <= this.confuseRadius) {
                     fox.isChasing = false;
                     // immediate slow wander
+                    if (fox.randomX<0) {fox.setFlipX(true)}
+                    else {fox.setFlipX(false)}
+                    fox.play("fox-walk", true);
                     fox.setVelocity(fox.randomX, fox.randomY);
                 } else {
                     // rabbit hidden and far away: ensure fox is not in chase mode.
                     fox.isChasing = false;
                     // if previously confused, allow it to stop being confused only when far
                     // normal roam (respect fox.randomX/Y)
+                    if (fox.randomX<0) {fox.setFlipX(true)}
+                    else {fox.setFlipX(false)}
+                    fox.play("fox-walk", true);
                     fox.setVelocity(fox.randomX, fox.randomY);
                 }
                 return; // skip normal chase logic entirely while hiding
@@ -485,12 +577,22 @@ class MainScene extends Phaser.Scene {
                 fox.isChasing = true;
                 const angle = Math.atan2(this.rabbit.y - fox.y, this.rabbit.x - fox.x);
                 fox.setVelocity(Math.cos(angle) * chaseSpeed, Math.sin(angle) * chaseSpeed);
+                if (angle<Math.PI * 1.5 && angle>Math.PI * 0.5) {fox.setFlipX(true)}
+                else {fox.setFlipX(false)}
+                fox.play("fox-walk", true);
+                if (fox.randomX<0) {fox.setFlipX(true)};
             } else if (fox.isChasing && dist < loseDistance) {
                 const angle = Math.atan2(this.rabbit.y - fox.y, this.rabbit.x - fox.x);
                 fox.setVelocity(Math.cos(angle) * chaseSpeed, Math.sin(angle) * chaseSpeed);
+                if (angle<Math.PI * 1.5 && angle>Math.PI * 0.5) {fox.setFlipX(true)}
+                else {fox.setFlipX(false)}
+                fox.play("fox-walk", true);
             } else {
                 fox.isChasing = false;
                 fox.setVelocity(fox.randomX, fox.randomY);
+                if (fox.randomX<0) {fox.setFlipX(true)}
+                else {fox.setFlipX(false)}
+                fox.play("fox-walk", true);
             }
         });
     } // end update

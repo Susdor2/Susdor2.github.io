@@ -33,5 +33,19 @@ export default {
                 frameHeight: 16,
             }]
         },
+        rabbit: {
+            key: 'rabbit',
+            args: ['assets/rabbit-sheet.png', {
+                frameWidth: 44,
+                frameHeight: 74,
+            }]
+        },
+        fox: {
+            key: 'fox',
+            args: ['assets/fox-sheet.png', {
+                frameWidth: 47,
+                frameHeight: 63,
+            }]
+        },
     }
 };

@@ -6,10 +6,19 @@
     <style>
       body { margin: 0; padding: 0; }
       canvas { display: block; margin: 0 auto; }
+      #game-container canvas {
+        position: absolute !important;
+        top: 0;
+        left: 0;
+        z-index: 1;
+      }
+
     </style>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.js"></script>
   </head>
   <body>
+    <div id="game-container"></div>
+    <div style="width: 400px; height: 500px; zIndex: 1000;">HELLO</div>
     <script src="src/main.js"></script>
   </body>
 </html>
